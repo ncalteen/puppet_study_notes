@@ -558,14 +558,109 @@
 
 ### filter()
 
+- Returns a filtered subset of an array or hash containing only entries that were matched by the lambda.
+  - The lambda evaluates each entry and returns a positive result if it matches.
+
+- __Example:__ Filter all facts with "ipaddress6" as the beginning of the key.
+
+  ```puppet
+  $ips = $facts.filter |$key, $value| {
+    $key =~ /^ipaddress6?_/
+  }
+  ```
+
+  ```bash
+  puppet apply /vagrant/manifests/ipaddresses.pp
+  cat /vagrant/manifests/ipaddresses.pp
+  ```
+
 ### map()
+
+- Returns an array from the results of a lambda.
+- Call map() on an array or hash, and a new array is returned with the results (the original is not modified).
+- The lambda's final statement should return a value to add to the result array.
+- __Example:__ Pass in an array of interface names, and return an array of IP addresses for those interfaces.
+
+  ```puppet
+  $ips = split($facts['interfaces'], ',').map |$interface| {
+    $facts["ipaddress_${interface}"]
+  }
+  ```
 
 ### reduce()
 
+- Processes an array or hash and returns a single value.
+- Takes in two parameters:
+  - An array or hash.
+  - An initial seed value.
+  - If the seed is not provided, it will use the first element in the hash/array.
+- The lambda should be written to perform aggregation, additiona, or some other function to operation on many values and return a single one.
+- __Example:__ Pass the hash of partitions to add together all of their sizes.
+
+  **/vagrant/manifests/partitions.pp**
+
+    ```puppet
+    $total_disk_space = $facts['partitions'].reduce(0) |$total, $partition| {
+      notice("partition ${partition[0]} is size ${partition[1]['size']}")
+      total + $partition[1]['size_bytes']
+    }
+    notice("Total space is ${total_disk_space}")
+    ```
+
 ### slice()
+
+- Creates chunks of a specified size from an array or hash.
+- The output can change, depending on how you invoke it.
+  - If a single parameter is passed between the pipes, the value passed into the lambda will be an array containing the number of items specified by the slice size (in parenthesis).
+
+    **/vagrant/manifests/slices.pp**
+
+      ```puppet
+      [1,2,3,4,5,6].slice(2) |$items$| {
+        notice("\$item[0] = ${item[0]}, \$item[1] = ${item[1]}")
+      }
+      ```
+
+      ```bash
+      $ puppet apply /vagrant/manifests/slices.pp
+      $item[0] = 1, $item[1] = 2
+      $item[0] = 3, $item[1] = 4
+      $item[0] = 5, $item[1] = 6
+      ```
+
+- If you provide the same number of parameters as the slice size, each variable will contain one entry from the slice.
+- Hash entries are always passed in key-value pair entries.
+- Most invocations of `slice()` produce no output, so it can be ignored.
 
 ### with()
 
+- Invokes a lambda exactly one time, passing the variables provided.
+- Most commonly used to isolate variables to a private scope, not available to the main scope's namespace.
+
+  ```puppet
+  with('nick', 'alteen', 'cse') |$first, $last, $title| {
+    notice("I am ${first} ${last}, ${title} at AWS")
+  }
+  ```
+
 ### Capturing Extra Parameters
 
-### Iteration Wrap-Up
+- Most functions only produce one or two parameters for input to the lambda.
+- `slice()` and `with()` can send an arbitrary number of parameters.
+- You can prefix the final parameter with the splat '*' operator to indicate it will accept all remaining input arguments.
+  - Referred to as "captures-rest".
+- The captures-rest data type will always be an array.
+
+  **/vagrant/manifests/hostfile_lines.pp**
+
+    ```puppet
+    # example: 192.168.250.6 puppet.example.com p.example.com puppetserver
+    $host = $hosts_line.split(' ')
+    with($host*) |$ipaddr, $hostname, *$aliases| {
+      notice("${hostname} has IP ${ipaddr} and aliases ${aliases}")
+    }
+    ```
+
+    ```bash
+    puppet apply /vagrant/manifests/hostfile_lines.pp
+    ```
