@@ -87,6 +87,8 @@
     - puppet
   ```
 
+- For now, make sure to remove the `puppet::agent` class from `common.yaml`.
+
 ## Creating a Class Manifest
 
 - Every module must contain an `init.pp` manifest, which must contain the module's definition for the base class.
@@ -133,7 +135,7 @@
 - This is the same as if we declared the resources outside the class.
 
   ```bash
-  puppet apply --environment test /etc/puppetlabs/code/environments/test/modules/puppet/manifests/
+  puppet apply --environment test /etc/puppetlabs/code/environments/test/manifests/
   ```
 
 ## Accepting Input
@@ -142,11 +144,22 @@
 
   ```puppet
   class puppet (
-      $version = 'latest',  # Default parameter - optional
-      $status  = 'running',
-      $enabled,             # No default - required
+    $version = 'latest',
+    $status  = 'running',
+    $enabled,
   ){
-      # ...
+    notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
+
+    package { 'puppet-agent':
+      ensure => latest,
+      notify => Service['puppet'],
+    }
+
+    service { 'puppet':
+      ensure => running,
+      enable => true,
+      subscribe => Package['puppet-agent'],
+    }
   }
   ```
 
@@ -160,8 +173,8 @@
       - Puppet's style guide states every class should include default values that cover the most common use case.
 
   ```bash
-  puppet apply --environment test /etc/puppetlabs/code/environments/test/modules/puppet/manifests/
-  # The first run will fail, as $enabled must be set.
+  sudo puppet apply --environment test /etc/puppetlabs/code/environments/test/manifests/
+  # Enabled is set to false. This is because of Hiera data!
   ```
 
 ## Sharing Files
@@ -181,6 +194,7 @@
     # ...
     [main]
       log_level = notice
+    # ...
     ```
 
 - Add a file resource to the class manifest, specifying source instead of content.
@@ -188,8 +202,24 @@
   **/etc/puppetlabs/code/environments/test/modules/puppet/manifests/init.pp**
 
   ```puppet
-  class puppet {
-    # ...
+  class puppet (
+    $version = 'latest',
+    $status  = 'running',
+    $enabled = true,
+  ){
+    notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
+
+    package { 'puppet-agent':
+      ensure => latest,
+      notify => Service['puppet'],
+    }
+
+    service { 'puppet':
+      ensure => running,
+      enable => true,
+      subscribe => Package['puppet-agent'],
+    }
+
     file { '/etc/puppetlabs/puppet/puppet.conf':
       ensure => file,
       owner  => 'root',
@@ -209,7 +239,7 @@
 ## Testing File Synchronization
 
   ```bash
-  sudo puppet apply --environment test /etc/puppetlabs/code/environments/test/manifests
+  sudo puppet apply --environment test /etc/puppetlabs/code/environments/test/manifests/
   ```
 
 - You will want to manually revert the permissions of the `puppet.conf` file.
@@ -253,15 +283,34 @@
 
   ```puppet
   class puppet (
-      $version         = 'latest',
-      $status          = 'running',
-      $enabled         = true,
-      $server          = 'puppet.example.com',
-      $common_loglevel = 'warning',
-      $agent_loglevel  = undef, # Only used if passed in when the class is declared.
-      $apply_loglevel  = undef,
-  ) {
-      # ...
+    $version         = 'latest',
+    $status          = 'running',
+    $enabled         = true,
+    $server          = 'puppet.example.com',
+    $common_loglevel = 'warning',
+    $agent_loglevel  = undef,
+    $apply_loglevel  = undef,
+  ){
+    notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
+
+    package { 'puppet-agent':
+      ensure => latest,
+      notify => Service['puppet'],
+    }
+
+    service { 'puppet':
+      ensure => running,
+      enable => true,
+      subscribe => Package['puppet-agent'],
+    }
+
+    file { '/etc/puppetlabs/puppet/puppet.conf':
+      ensure => file,
+      owner  => 'root',
+      group  => 'wheel',
+      mode   => '0644',
+      source => 'puppet:///modules/puppet/puppet.conf',
+    }
   }
   ```
 
@@ -336,17 +385,35 @@
     **/etc/puppetlabs/code/environments/test/modules/puppet/manifests/init.pp**
 
     ```puppet
-    class puppet(
-        # ...
-    ) {
-        # ...
-        file { '/etc/pupptlabs/puppet/puppet.conf':
-          ensure  => file,
-          owner   => 'root',
-          group   => 'wheel',
-          mode    => '0644',
-          content => epp('puppet:///puppet/puppet.conf.epp),
-        }
+    class puppet (
+      $version         = 'latest',
+      $status          = 'running',
+      $enabled         = true,
+      $server          = 'puppet.example.com',
+      $common_loglevel = 'warning',
+      $agent_loglevel  = undef,
+      $apply_loglevel  = undef,
+    ){
+      notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
+
+      package { 'puppet-agent':
+        ensure => latest,
+        notify => Service['puppet'],
+      }
+
+      service { 'puppet':
+        ensure => running,
+        enable => true,
+        subscribe => Package['puppet-agent'],
+      }
+
+      file { '/etc/puppetlabs/puppet/puppet.conf':
+        ensure => file,
+        owner  => 'root',
+        group  => 'wheel',
+        mode   => '0644',
+        content => epp('puppet/puppet.conf.epp'),
+      }
     }
     ```
 
@@ -369,8 +436,8 @@
   ```erb
   <%- | String $server,
         String $common_loglevel,
-        Optional['String'] $agent_loglevel = undef,
-        Optional['String'] $apply_loglevel = undef,
+        Optional[String] $agent_loglevel = undef,
+        Optional[String] $apply_loglevel = undef,
   | -%>
   ```
 

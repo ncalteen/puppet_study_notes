@@ -53,6 +53,14 @@
 
 ## Making Tests Convenient
 
+- For now, make vagrant the owner of the needed directories.
+
+  ```bash
+  sudo chown -R vagrant /etc/puppetlabs
+  sudo chgrp -R sysadmin /etc/puppetlabs
+  sudo chmod -R g+w /etc/puppetlabs
+  ```
+
 - When running Puppet with sudo, it uses system-level config files:
 
   ```bash
@@ -75,7 +83,7 @@
   # ...
   ```
 
-- Either use sudo every time Puppet is run, or set up a config gile to use system paths.
+- Either use sudo every time Puppet is run, or set up a config file to use system paths.
 
 ## Running Puppet without sudo
 
@@ -95,5 +103,6 @@
   ```bash
   sudo grep secure_path /etc/sudoers \
   > | sed -e 's#$#:/opt/puppetlabs/bin#' \
-  > | sudo tee /etc/sudoers.d/puppet-securepath.sh
+  > | sudo tee /etc/sudoers.d/puppet-securepath
+  sudo env | grep PATH
   ```

@@ -29,7 +29,7 @@
 
   ```ini
   [main]
-  module_repository = http://forge.example.com
+    module_repository = http://forge.example.com
   ```
 
 ## Evaluating Module Quality
@@ -147,6 +147,10 @@
   **/etc/puppetlabs/code/environments/test/manifests/site.pp**
 
   ```puppet
+  notify { 'UsingTest':
+    message => 'Processing catalog from the Test environment.',
+  }
+
   # Look up all classes defined in Hiera and other data sources.
   lookup('classes', Array[String], 'unique').include
   ```
@@ -163,7 +167,7 @@
 
 ### Assigning Classes to Every Node
 
-- This ca be assigned in `common.yaml` using a top-level key named 'classes'.
+- This can be assigned in `common.yaml` using a top-level key named 'classes'.
 
   **/etc/puppetlabs/code/hieradata/common.yaml**
 

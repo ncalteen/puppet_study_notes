@@ -1,6 +1,6 @@
 # Separating Data from Code
 
-- A module written for a single node wiht hardcoded data may work, but it is not portable or practical.
+- A module written for a single node with hardcoded data may work, but it is not portable or practical.
 
 ## Introducing Hiera
 
@@ -167,22 +167,24 @@
 - Enable YAML data input from `/etc/puppetlabs/code/hieradata`.
   - Allows you to share Hiera data between environments.
 
-    **/vagrant/etc-puppet/hiera.yaml**
+    **/etc/puppetlabs/code/hiera.yaml**
 
     ```yaml
     ---
-    :backends:
-      - yaml
-    :hierarchy:
-      - "hostname/%{facts.hostname}"
-      - "os/%{facts.osfamily}"
-      - common
-    :yaml:
-      :datadir: /etc/puppetlabs/code/hieradata
-    ```
+    version: 5
+    defaults:        # for any hierarchy level without these keys
+      datadir: /etc/puppetlabs/code/hieradata  # directory name inside the environment
+      data_hash: yaml_data
 
-    ```bash
-    cp /vagrant/etc-puppet/hiera.yaml /etc/puppetlabs/code
+    hierarchy:
+      - name: "Hostname"
+        path: "hostname/%{trusted.hostname}.yaml"
+
+      - name: "OS-specific values"
+        path: "os/%{facts.osfamily}.yaml"
+
+      - name: "common"
+        path: "common.yaml"
     ```
 
 ## Looking Up Hiera Data
@@ -231,9 +233,15 @@
   **/vagrant/manifests/hierasample.pp**
 
   ```puppet
-  $status = lookup({name => 'puppet::status', default_value => 'running'}) # Always set a default!
-  $enabled = lookup({name => 'puppet::enabled', default_value => 'true'})
+  # Always set a default value
+  $status  = lookup({ name => 'puppet::status',  default_value => 'running' })
+  $enabled = lookup({ name => 'puppet::enabled', default_value => true })
 
+  notify { 'puppet-settings':
+    message => "Status should be ${status}, start at boot ${enabled}.",
+  }
+
+  # Now the same code can be used regardless of the value
   service { 'puppet':
     ensure => $status,
     enable => $enabled,

@@ -164,7 +164,7 @@
       Optional[String] $agent_loglevel  = undef,
       Optional[String] $apply_loglevel  = undef,
   ) {
-      # ...
+      # Resource declarations.
   }
   ```
 
@@ -185,9 +185,14 @@
     ---
     classes:
       - puppet
+
     puppet::version: 'latest'
     puppet::status: 'stopped'
-    puppet::enabled: false
+    puppet::enabled: true
+
+    ntp::interfaces:
+      - '127.0.0.1'
+      - '192.168.250.10'
     ```
 
 - Without any function calss, these values will be applied to the module as parameter input, overriding class defaults.
@@ -250,9 +255,10 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
 
   ```puppet
   class puppet (
-      String $version  = 'latest',
-      String $loglevel = 'warning',
-  ) {
+    # Common parameters across all classes
+    String $version         = 'latest',
+    String $common_loglevel = 'warning',
+  ){
 
   }
   ```
@@ -261,17 +267,45 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
 
   ```puppet
   class puppet::agent (
-      Enum['running','stopped'] $status = 'running',
-      Boolean $enabled,
+    # Parameters specific to the agent subclass
+    Enum['running','stopped'] $status = 'running',
+    Boolean $enabled                  = true,
+    String $server                    = 'puppet.example.com',
   ) inherits puppet {
-      # Add all resources previously defined in the puppet class.
+    notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
+
+    package { 'puppet-agent':
+      ensure => latest,
+      notify => Service['puppet'],
+    }
+
+    service { 'puppet':
+      ensure => running,
+      enable => true,
+      subscribe => Package['puppet-agent'],
+    }
+
+    file { '/etc/puppetlabs/puppet/puppet.conf':
+      ensure  => file,
+      owner   => 'root',
+      group   => 'wheel',
+      mode    => '0644',
+      content => epp('puppet/puppet.conf.epp', {
+        'server'          => $server,
+        'common_loglevel' => $common_loglevel,
+        'agent_loglevel'  => $agent_loglevel,
+        'apply_loglevel'  => $apply_loglevel,
+      }),
+    }
   }
   ```
 
   **/etc/puppetlabs/code/environments/test/modules/puppet/manifests/server.pp**
 
   ```puppet
-  class puppet::server ( ) {
+  class puppet::server(
+
+  ) {
 
   }
   ```
@@ -281,12 +315,26 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
   **/etc/pupptlabs/code/hieradata/common.yaml**
 
   ```yaml
+  ---
   classes:
+    - ntp
     - puppet::agent
+
   puppet::common_loglevel: 'info'
   puppet::version: 'latest'
-  puppet::agent::status: 'stopped'
-  puppet::agent::enabled: false
+  puppet::agent::status: 'running'
+  puppet::agent::enabled: true
+  puppet::agent::server: 'puppet.example.com'
+
+  ntp::interfaces:
+    - '127.0.0.1'
+  ntp::restrict:
+    - 'default kod nomodify notrap nopeer noquery'
+    - '-6 default kod nomodify notrap nopeer noquery'
+    - '127.0.0.1'
+    - '-6 ::1'
+    - '192.168.250.0/24'
+    - '-6 fe80::'
   ```
 
 ## Creating New Resource Types
@@ -437,26 +485,88 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
   - Contains a template to populate the config file with both agent and server settings.
   - Each class would include the config class.
 
-  **/etc/puppetlabs/code/environments/test/modules/puppet/manifests/_config.pp**
+  **/etc/puppetlabs/code/environments/test/modules/puppet/manifests/config.pp**
 
   ```puppet
-  class puppet::_config (
-      Hash $common = {}, # Empty if not available in Hiera.
-      Hash $agent  = {},
-      Hash $user   = {},
-      Hash $server = {},
+  class puppet::config(
+    String $server,
+    String $common_loglevel,
+    Optional[String] $agent_loglevel = undef,
+    Optional[String] $apply_loglevel = undef,
   ) {
-      file { 'puppet.conf':
-        ensure  => file,
-        path    => '/etc/puppetlabs/puppet/puppet.conf',
-        owner   => 'root',
-        group   => 'wheel',
-        mode    => '0644',
-        content => epp('puppet:///puppet/puppet.conf.epp', { 'agent' => $agent, 'server' => $server}),
-      }
+    file { 'puppet.conf':
+      ensure  => file,
+      path    => '/etc/puppetlabs/puppet/puppet.conf',
+      owner   => 'root',
+      group   => 'wheel',
+      mode    => '0644',
+      content => epp('puppet/puppet.conf.epp', {
+        'server'          => $server,
+        'common_loglevel' => $common_loglevel,
+        'agent_loglevel'  => $agent_loglevel,
+        'apply_loglevel'  => $apply_loglevel,
+      }),
+    }
   }
   ```
 
+- You will need to also update Hiera data to ensure that the `puppet::config` class is able to pick up parameters.
+
+  **/etc/puppetlabs/code/hieradata/common.yaml**
+
+  ```yaml
+  ---
+  classes:
+    - ntp
+    - puppet::agent
+
+  # Common Puppet Cofig
+  puppet::version: 'latest'
+
+  # Puppet::Agent Config
+  puppet::agent::status: 'running'
+  puppet::agent::enabled: true
+
+  # Puppet::Config Config
+  puppet::config::server: 'puppet.example.com'
+  puppet::config::common_loglevel: 'info'
+  puppet::config::agent_loglevel: 'info'
+  puppet::config::apply_loglevel: 'info'
+
+  ntp::interfaces:
+    - '127.0.0.1'
+  ntp::restrict:
+    - 'default kod nomodify notrap nopeer noquery'
+    - '-6 default kod nomodify notrap nopeer noquery'
+    - '127.0.0.1'
+    - '-6 ::1'
+    - '192.168.250.0/24'
+    - '-6 fe80::'
+  ```
+
+- Lastly, you will want to update the template file so that it receives the input variables from the config class, as opposed to referencing fully-qualified names.
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/templates/puppet.config.epp**
+
+  ```erb
+  <%- | String $server,
+      String $common_loglevel,
+      Optional[String] $agent_loglevel = undef,
+      Optional[String] $apply_loglevel = undef,
+  | -%>
+  [master]
+    log_level = <%= $common_loglevel %>
+  [agent]
+  <% if $agent_loglevel != undef { -%>
+    log_level = <%= $agent_loglevel %>
+  <% } -%>
+    server = <%= $server %>
+  [user]
+  <% if $apply_loglevel != undef { -%>
+    log_level = <%= $apply_loglevel %>
+  <% } -%>
+  ```
+  
 - Note this does not require agent or server packages, nor does it notify the Puppet agent or server services.
   - These are different classes, and may not be declared on the same node.
   - It's only safe to depend on resources that are guaranteed to be in the catalog.
@@ -466,22 +576,25 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
 
   ```puppet
   class puppet::agent (
-      String $status = 'running',
-      Boolean $enabled,
-  ) {
-      include puppet::_config
+    # Parameters specific to the agent subclass
+    Enum['running','stopped'] $status = 'running',
+    Boolean $enabled                  = true,
+  ) inherits puppet {
+    include puppet::config
 
-      package { 'puppet-agent':
-        version => $version,
-        before  => File['puppet.conf'], # External class dependency.
-        notify  => Service['puppet'],
-      }
+    notice("Install the $version version of Puppet, ensure it's $status, and set boot time start to $enabled")
 
-      service { 'puppet':
-        ensure => $status,
-        enable => $enabled,
-        subscribe => [Package['puppet-agent'], File['puppet.conf']],
-      }
+    package { 'puppet-agent':
+      ensure => $version,
+      before => File['puppet.conf'],
+      notify => Service['puppet'],
+    }
+
+    service { 'puppet':
+      ensure => $status,
+      enable => $enabled,
+      subscribe => [ Package['puppet-agent'], File['puppet.conf'] ],
+    }
   }
   ```
 
@@ -494,7 +607,7 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
 
   ```puppet
   class puppet::agent (
-      String $status   = 'enabled',
+      String $status   = 'running',
       Boolean $running = true,
       Hash $config     = {},
   ) {
@@ -578,6 +691,7 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
         contain application::package
         contain application::package
     }
+    ```
 
 ## Creating Reusable Modules
 

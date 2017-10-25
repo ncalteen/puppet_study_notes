@@ -24,7 +24,7 @@
 
 - Make a reminder that you are in a test environment.
 
-  **/etc/puppetlabs/code/environments/tests/manifests/site.pp**
+  **/etc/puppetlabs/code/environments/test/manifests/site.pp**
 
   ```puppet
   notify { 'usingtest':
