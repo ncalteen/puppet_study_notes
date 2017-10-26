@@ -566,7 +566,7 @@ $myvar = lookup({name => '[parameter]', merge => 'unique'})
     log_level = <%= $apply_loglevel %>
   <% } -%>
   ```
-  
+
 - Note this does not require agent or server packages, nor does it notify the Puppet agent or server services.
   - These are different classes, and may not be declared on the same node.
   - It's only safe to depend on resources that are guaranteed to be in the catalog.
