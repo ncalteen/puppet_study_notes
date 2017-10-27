@@ -762,18 +762,335 @@
 
 ### Adjusting Properties
 
+- For each property with a value that needs to be compared to the resource, you will need a getter and setter method.
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/lib/puppet/provider/elephant/posix.rb**
+
+  ```ruby
+  Puppet::Type.type( :elephant ).provide( :posix ) do
+    desc "Manages elephants on POSIX-compliant nodes."
+
+    defaultfor :osfamily => ['redhat','debian','freebsd','solaris']
+
+    confine :osfamily => ['redhat','debian','freebsd','solaris'] # Only *Nix OSes.
+    confine :true => /^4/.match( clientversion ) # Only Puppet 4 clients.
+    confine :exists => '/tmp' # Dir must exist.
+    contine :feature => 'posix' # POSIX feature available.
+
+    filename = '/etc/elephants' + resource[name]
+
+    # Needed commands
+    commands :echo => 'echo'
+    commands :ls => 'ls'
+    commands :rm => 'rm'
+    commands :sed => 'sed'
+
+    def color # Getter
+      sed('-e', 's/^color = \(.*\)$/\1/', filename)
+    end
+
+    def color=(value) # Setter
+      sed('-i', '-e', 's/^color = /color = #{value}/', filename)
+    end
+
+    def motto # Getter
+      sed('-e', 's/^motto = \(.*\)$/\1/', filename)
+    end
+
+    def motto=(value) # Setter
+      sed('-i', '-e', 's/^motto = /motto = #{value}/', filename)
+    end
+
+    # Ensurable requires these methods.
+    def create
+      echo("color = #{resource['color']}", '>', filename)
+      echo("motto = #{resource['motto']}", '>>', filename)
+    end
+
+    def exists?
+      begin
+        ls(filename)
+      rescue Puppet::ExecutionFailure => e
+        false
+      end
+    end
+
+    def destroy
+      rm(filename)
+    end
+
+    def flush
+      echo("color = #{resource['color']}", '>', filename)
+      echo("motto = #{resource['motto']}", '>>', filename)
+      @property_hash = resource.to_hash
+    end
+  end
+  ```
+
+  - The `color` method retireves the current value for the property 'color', and the `color=(value)` method sets the color on the node.
+  - The same applies for the 'motto' property.
+- If there are many attributes, you may want to cache up the changes and write them out at once.
+  - After calling setter methods, the resource will call the `flush` method, if defined.
+  - In this case, it is faster to simply write a new file.
+- The final call, `@property_hash = resource.to_hash`, caches the current values of the resource into an instance variable.
+  - This can be used with caching.
+
+### Providing a List of Instances
+
+- If reading resources is low impact, you can use an `instances` class method to load all instances into memory.
+  - This can improve performance compared to loading each one iteratively.
+- Resource providers use this data when making commands like:
+
+  ```bash
+  puppet resource elephant
+  ```
+
+- To disable preloading, define it with an empty array.
+
+  ```ruby
+  self.instances
+    []
+  end
+  ```
+
+- To preload data, we need to construct the method to output each file in the `/tmp/elephants` directory and create a new object with the values.
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/lib/puppet/provider/elephant/posix.rb**
+
+  ```ruby
+  Puppet::Type.type( :elephant ).provide( :posix ) do
+    desc "Manages elephants on POSIX-compliant nodes."
+
+    defaultfor :osfamily => ['redhat','debian','freebsd','solaris']
+
+    confine :osfamily => ['redhat','debian','freebsd','solaris'] # Only *Nix OSes.
+    confine :true => /^4/.match( clientversion ) # Only Puppet 4 clients.
+    confine :exists => '/tmp' # Dir must exist.
+    contine :feature => 'posix' # POSIX feature available.
+
+    filename = '/etc/elephants' + resource[name]
+
+    # Needed commands
+    commands :echo => 'echo'
+    commands :ls => 'ls'
+    commands :rm => 'rm'
+    commands :sed => 'sed'
+    commands :cat => 'cat'
+
+    def color # Getter
+      sed('-e', 's/^color = \(.*\)$/\1/', filename)
+    end
+
+    def color=(value) # Setter
+      sed('-i', '-e', 's/^color = /color = #{value}/', filename)
+    end
+
+    def motto # Getter
+      sed('-e', 's/^motto = \(.*\)$/\1/', filename)
+    end
+
+    def motto=(value) # Setter
+      sed('-i', '-e', 's/^motto = /motto = #{value}/', filename)
+    end
+
+    # Ensurable requires these methods.
+    def create
+      echo("color = #{resource['color']}", '>', filename)
+      echo("motto = #{resource['motto']}", '>>', filename)
+    end
+
+    def exists?
+      begin
+        ls(filename)
+      rescue Puppet::ExecutionFailure => e
+        false
+      end
+    end
+
+    def destroy
+      rm(filename)
+    end
+
+    def flush
+      echo("color = #{resource['color']}", '>', filename)
+      echo("motto = #{resource['motto']}", '>>', filename)
+      @property_hash = resource.to_hash
+    end
+
+    self.instances
+      elephants = ls('/tmp/elephants/')
+
+      elephants.split("\n").collect do |elephant|
+        attrs = Hash.new
+        output = cat("/tmp/elephants/#{elephant}")
+        output.split("\n").collect do |line|
+          name, value = line.split(' = ', 2)
+          attrs[name] = value
+        end
+
+        attrs[:name] = elephant
+        attrs[:ensure] = present
+        new(attrs)
+      end
+    end
+  end
+  ```
+
+- The `self.instances` section reads each assignment in the elephant file, and assigns the value to the name in a hash.
+  - Every instance of the resource is not available in the `@property_hash` variable.
+  - `puppet agent` and `puppet apply` will load all instances from this metod, and match up resources in the database to the provider that returned their values.
+
 ### Taking Advantage of Caching
+
+- If all instances are cached in memory, you don't need to read from disk every time.
+  - The `exists?` method can be rewritten to simply:
+
+    ```ruby
+    def exists?
+      @property_hash[:ensure] == 'present'
+    end
+    ```
+
+- However, all resources that are created or deleted must be updated in memory as well.
+  - Thus, the `create` and `delete` methods must be updated.
+
+    ```ruby
+    def create
+      echo("color = #{resource['color']}", '>', filename)
+      echo("motto = #{resource['motto']}", '>>', filename)
+      @property_hash[:ensure] = 'present'
+    end
+
+    # ...
+
+    def destroy
+      rm(filename)
+      @property_hash[:ensure] = 'absent'
+    end
+    ```
+
+- Finally, the setter and getter methods can be updated.
+
+    ```ruby
+    def color
+      @property_hash[:color] || :absent
+    end
+
+    def color=(value)
+      @property_hash[:color] = value
+    end
+    ```
+
+- Now that changes are being saved back to the hash, you must define the `flush` method to write changes back to disk.
 
 ### Learning More About Puppet Providers
 
 ## Identifying New Features
 
+- __Features:__ Ruby classes that determine if a specific feature is available on the target node.
+  - For example, create an elephant feature that is activated if the node has elephants installed.
+  - Always written in Ruby.
+  - Stored in the `<module>/lib/puppet/feature` directory.
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/lib/puppet/feature/elephant.rb**
+
+  ```ruby
+  require 'puppet/util/feature'
+
+  Puppet.features.add(:elephant) do
+    Dir.exist?('/tmp') and
+    Dir.exist?('/tmp/elephants') and
+    !Dir.glob?('/tmp/elephants/*').empty?
+  end
+  ```
+
 ## Binding Data Providers in Modules
+
+- The `lookup()` function and automatic parameter lookup in classes use the following sources for data:
+  - The global data provider (Hiera) in `${codedir}/hiera.yaml`.
+  - The environment data provider in `environment.conf`.
+  - The module data provider in `metadata.json`.
+
+- There are two steps to providing a data source specific to a module:
+  1. Define `data_provider` in the module's `metadata.json` file.
+  1. Create a function or Hiera config file as the data source for the module.
 
 ### Using Data from a Function
 
+- Create a Ruby function named `data` in your module's namespace.
+- The function can be in Puppet language, stored in `<module>/functions/data.pp`, or a Ruby function defined in `<module>/lib/puppet/functions/<module>/data.rb`.
+  - __Example:__ Ruby function.
+
+    ```ruby
+    Puppet::Functions.create_function(:'mymodule::data') do
+      def data()
+        # The following is an example of code to be replaced.
+        # Return a hash with parameter name to value mapping for the user class.
+        return {
+          'specialapp::user::id'   => 'value for parameter $id',
+          'specialapp::user::name' => 'value for parameter $name',
+        }
+      end
+    end
+    ```
+
+- Regardless of language, the function must return a hash that contains keys within the class namespace, exactly as how keys must be defined in Hiera data.
+- Make sure to modify the `metadata.json` file in the module's directory to indicate `"data_provider": "function"`.
+  - The `mymodule::data` function is now the module data source for the 'mymodule' module.
+
 ### Using Data from Hiera
+
+- Create a module data configuration file that defines the Hiera hierarchy.
+  - Must be named `hiera.yaml`.
+  - Must be version 4.
+
+    ```yaml
+    ---
+    version: 4
+    datadir: data # Path to data files.
+    hierarchy:
+      - name: "OS Family"
+        backend: json
+        path: "os/%{facts.os.family}"
+      - name: "common"
+        backend: yaml
+    ```
+
+- Create the directory listed in `datadir` and populate with the Hiera data files.
+- Lastly, specify `"data_provider": "hiera"` in the module's `metadata.json` file.
 
 ### Performing Lookup Queries
 
+- The lookup strategy of global, then environment, then module data providers, would be queried as follows if you used the `function` data source.
+
+  ```puppet
+  class mymodule(
+    # Will check global hiera, then environment data provider, then call mymodule::data() to get all values.
+    Integer $id,
+    String $user,
+  ){
+    # ...
+  }
+  ```
+
+- If you used the `hiera` data source for the module, then parameter values would be independently looked up in each data source.
+
+  ```puppet
+  class mymodule(
+    # Will check global Hiera, then environment data provider, then module Hiera data.
+    Integer $id,
+    String $user,
+  ){
+    # ...
+  }
+  ```
+
 ## Requirements for Module Plugins
+
+- External fact programs should be placed in the `facts.d/` directory and be executable by the `puppet` user.
+- External fact data should be placed in the `facts.d/` directory and have file extensions of `.yaml`, `.json`, or `.txt`.
+- Functions written in Puppet should be placed in the `functions/` directory.
+- Ruby functions should be placed in `lib/puppet/functions/<modulename>/` and be named after the function.
+- Ruby features should be placed in `lib/puppet/features/` and be named after the feature.
+- Ruby functions or templates that call custom functions need to prefix the function name with `function_`.
+- Ruby functions or templates that call custom functions need to pass all input parameters in a single array.
