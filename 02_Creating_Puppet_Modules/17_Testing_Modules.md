@@ -133,6 +133,12 @@
       end
     end
   end
+  ```
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb**
+
+  ```ruby
+  require 'spec_helper'
 
   describe 'puppet::config', :type => 'class' do
     ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel| # Loop through log level options.
@@ -146,8 +152,7 @@
         end
 
         it do
-          should contain_file('puppet.conf').with({
-          })
+          should contain_file('puppet.conf').with({ })
         end
       end
     end
@@ -244,6 +249,12 @@
       end
     end
   end
+  ```
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb**
+
+  ```ruby
+  require 'spec_helper'
 
   describe 'puppet::config', :type => 'class' do
     ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel| # Loop through log level options.
@@ -369,6 +380,12 @@
       end
     end
   end
+  ```
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb**
+
+  ```ruby
+  require 'spec_helper'
 
   describe 'puppet::config', :type => 'class' do
     ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel| # Loop through log level options.
@@ -391,6 +408,12 @@
       end
     end
   end
+  ```
+
+  **/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/agent_spec.rb**
+
+  ```ruby
+
   ```
 
   ```bash
