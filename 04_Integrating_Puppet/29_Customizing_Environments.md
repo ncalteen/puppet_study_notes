@@ -381,6 +381,89 @@
 
 ## Invalidating the Environment Cache
 
+- As mentioned previously, its recommended to configure stable environments with `environment_timeout` set to `infinite`.
+  - Provides higher performance for remote clients.
+  - Ensures updates wont propagate to nodes accidentally.
+- After pushing changes to the environment, you will ask the Puppet server to invalidate the environment cache.
+  - This is available as an API call to the Puppet server.
+  - A client key is required for this, as it involves special privileges.
+
+    ```bash
+    # This will generate a new client key for the machine making invalidation requests.
+    puppet config set server puppet.example.com
+    puppet agent --certname code-deployment --test --noop
+
+    # Sign the cert on the Puppet server.
+
+    puppet config set server puppet.example.com
+    puppet agent --certname code-deployment --no-daemonize --noop
+    ```
+
+  - Add rules to permit this certificate access to delete the environment cache (specified in `/etc/puppetlabs/puppetserver/conf.d/auth.conf`).
+  - Below section must be added before the default deny rule.
+
+    ```hocon
+    {
+      match-request: {
+        path: "/puppet-admin-api/v1/environment-cache"
+        type: path
+        method: delete
+      }
+      allow: [ code-deployment ]
+      sort-order: 200
+      name: "environment-cache"
+    }
+    # Default deny rule
+    ```
+
+    ```bash
+    # Restart the Puppet server to enforce the change.
+    sudo systemctl restart puppetserver
+    ```
+
+- Once authorized, the cache can be invalidated via a `curl` command.
+  - A `204 No Content` response is expected.
+
+  ```bash
+  curl -i --cert .puppetlabs/etc/puppet/ssl/certs/code-deployment.pem \
+    --key .puppetlabs/etc/puppet/ssl/private_keys/code-deployment.pem \
+    --cacert ./puppetlabs/etc/puppet/ssl/certs/ca.pem \
+    -X DELETE \
+    https://puppet.example.com:8140/puppet-admin-api/v1/environment-cache
+  ```
+
 ## Restarting JRuby when Updating Plugins
 
-## Reviewing Environments
+- After deploying changes to module plugins, inform Puppet Server of the changes so that it can restart JRuby instances to update their plugin code.
+  - This should be added immediately after invalidating the environment cache.
+- Use the below to permit access for the code-deployment key to call the necessary update API.
+  - Again, make sure to add before the default deny rule.
+
+    ```hocon
+    {
+      match-request: {
+        path: "/puppet-admin-api/v1/jruby-pool"
+        type: path
+        method: delete
+      }
+      allow: [ code-deployment ]
+      sort-order: 200
+      name: "jruby-pool"
+    }
+    # Default deny rule.
+    ```
+
+    ```bash
+    # Restart the Puppet server to activate the change.
+    sudo systemctl restart puppetserver
+    ```
+
+- The JRuby pool can be restarted with a similar `curl` request.
+
+  ```bash
+  curl -i --cert .puppetlabs/etc/puppet/ssl/certs/code-deployment.pem \
+    --key .puppetlabs/etc/puppet/ssl/private_keys/code-deployment.pem \
+    --cacert ./puppetlabs/etc/puppet/ssl/certs/ca.pem \
+    -X DELETE \
+    https://puppet.example.com:8140/puppet-admin-api/v1/jruby-pool
+  ```
