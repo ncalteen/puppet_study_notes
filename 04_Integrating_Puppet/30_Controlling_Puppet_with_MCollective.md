@@ -205,18 +205,192 @@
 
 ### Viewing Node Inventory
 
+- This command allows you to see how a given server is configured.
+  - What collectives it is part of.
+  - What facts it has.
+  - What Puppet classes are applied.
+  - Running statistics.
+
+  ```bash
+  mco inventory client.example.com
+  ```
+
+- You can pass ruby scripts to the inventory service as well, for formatting the output in different ways.
+
+  **~/inventory.mc**
+
+  ```ruby
+  # Format: hostname: architecture, operating system, OS release.
+  inventory do
+    format "%20s: %8s %10s %20s"
+    fields {[
+      identity,
+      facts["os.architecture"],
+      facts["operatingsystem"],
+      facts["operatingsystemrelease"]
+    ]}
+  end
+  ```
+
+- Call the inventory command and pass the script file.
+
+  ```bash
+  mco inventory --script inventory.mc
+  ```
+
 ### Checking Puppet Status
+
+- You can query the Puppet agent status of any node using MCollective.
+- First, find a list of nodes with the MCollective Puppet agent installed.
+
+  ```bash
+  mco find --with-agent puppet
+  ```
+
+- Now check the currnt agent status.
+
+  ```bash
+  mco puppet count
+  ```
+
+- A graphical summary of nodes can be output as well.
+
+  ```bash
+  mco puppet summary
+  ```
 
 ### Disabling the Puppet Agent
 
+- You may wish to disable the Puppet agent during maintenance periods, such as patching.
+- An optional message can be added to explain why the disable took place.
+
+  ```bash
+  mco puppet disable --with-identity client.example.com message="Patching"
+  ```
+
+- If someone tries to run Puppet on the node, they will get a message back explaining that it is disabled.
+
+  ```bash
+  mco puppet runonce --with-identity client.example.com
+  ```
+
+- Once ready, the agent can then be re-enabled.
+
+  ```bash
+  mco puppet enable --with-identity client.example.com
+  ```
+
 ### Invoking Ad Hoc Puppet Runs
+
+- The Puppet agent can be instructed to evaluate the catalog immediately on a node.
+
+  ```bash
+  mco puppet runonce --with-identity client.example.com
+  ```
+
+- You can also target multiple nodes by fact values.
+
+  ```bash
+  mco puppet runonce --tags=sudo --with-fact operatingsystem=CentOS
+  ```
+
+- Or, you can run all servers in batches specified by a number input.
+
+  ```bash
+  # Run all, 5 at a time.
+  mco puppet runall 5
+  ```
+
+- If there is an issue with overlap during the above, a sleep time can be introduced between batches when calling the `--batch` option instead of `runall`.
+
+  ```bash
+  mco puppet --batch 10 --batch-sleep 60 --tags ntp
+  ```
 
 ### Limiting Targets with Filters
 
+- Filters are used by the discovery plugin to limit which nodes are sent a request.
+- Filters can be applied to any MCollective command.
+- __Example:__ List all nodes with "serv" in the host FQDN.
+
+  ```bash
+  mco find --with-identity /serv/
+  ```
+
+- __Example:__ List hosts with the Puppet class mcollective::client.
+
+  ```bash
+  mco find --with-class mcollective::client
+  ```
+
+- __Example:__ List hosts with the operatingsystem fact set as Ubuntu.
+
+  ```bash
+  mco find --with-fact operatingsystem=Ubuntu
+  ```
+
+- There are two types of combination filters.
+  - Combine Puppet classes and Facter facts.
+    - __Example:__ Find all CentOS hosts with the puppet class 'nameserver' applied.
+
+      ```bash
+      mco find --with "/nameserver/ operatingsystem=CentOS"
+      ```
+  - Create searches with the select filter against facts and Puppet classes.
+    - Includes Boolean logic.
+    - __Example:__ All CentOS hosts that are not in the test environment.
+
+      ```bash
+      mco find --select "operatingsystem=CentOS and not environment=test"
+      ```
+
+    - __Example:__ Virtualized hosts with either the httpd or nginx Puppet class applied.
+
+      ```bash
+      mco find --select "(/httpd/ or /ngnx/) and is_virtual=true"
+      ```
+
 ### Providing a List of Targets
+
+- You can specify which nodes to make requests of using a file with one FQDN per line.
+
+  ```bash
+  mco puppet runonce --disc-method flatfile --disc-option /tmp/list-of-names.host
+  ```
+
+- Alternatively, you can pipe the list of nodes to the command:
+
+  ```bash
+  cat list-of-hosts.txt | mco puppet runonce -disc-method stdin
+  ```
 
 ### Limiting Concurrency
 
+- By default, every node which matches the query will respond immediately on contact.
+- Flags in the command can be used to set how many servers receive a request in a batch, and how much time to wait between batches.
+
+  ```bash
+  # Requests a response from one (effectively rancom) node.
+  mco puppet status --one
+  ```
+
+  ```bash
+  # A fixed number of servers or a percentage of servers matching a filter.
+  mco puppet status --limit 2
+  ```
+
+  ```bash
+   # One-third of nodes with the webserver Puppet class applied.
+   # Tell them to return their FQDN.
+   mco shell run "hostname -fqdn" --limit 33% --with-class webserver.
+   ```
+
 ### Manipulating Puppet Resource Types
 
-## Comparing to Puppet Application Orchestration
+- You can use MCollective to interact directly with each node's RAL.
+
+  ```bash
+  mco puppet resource service httpd ensure=stopped --with-identity /dashserver/
+  ```
+
+- The normal rules for using filters apply.
