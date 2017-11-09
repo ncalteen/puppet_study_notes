@@ -1,0 +1,254 @@
+= Managing TLS Certificates =
+
+== Reviewing Node Authentication ==
+
+* '''Bidirectional Validation:''' Both the Puppet server and agent validate the other's certificate.
+* Prevents man in the middle attacks.
+* Once both sides have validated each other, they use the certificates to negotiate an encrypted communication session.
+* When Puppet provides the CA, the process for how this occurs is:
+
+# A CA server is configured to sign Puppet agent CSRs.
+# Each Puppet server has a certificate signed by the Puppet CA.
+# Each agent submits a CSR to the CA before attempting to contact a server.
+# The CSR is signed manually via the <code>puppet cert</code> command, or via automatic signing.
+# The agent retrieves the signed certificate, and then contacts the Puppet server.
+# The Puppet server verifies the agent's certificate was signed by the same CA.
+# The agent verifies that the Puppet server's certificate was signed by the same CA.
+
+== Autosigning Agent Certificates ==
+
+* Manual signing may not be viable in a heavily-scaled environment.
+* Different types of automatic signing can be enabled for a CA.
+
+=== Name-Based Autosigning ===
+
+* Automatically sign certificates based on the name given by the requestor.
+* Set the value of <code>autosign</code> in the <code>[master]</code> section of <code>puppet.conf</code> to the name of a configuration file containing the certificate names that should be signed automatically.
+
+<source lang="ini">
+[master]
+  autosign = $confdir/autosign.conf # Default value.
+</source>
+
+* The file should contain the full name or glob(*)-style wildcards that match certificates to sign.
+
+<source lang="bash">
+# Enable autosigning for every node in the example.com domain.
+# Will not match subdomains like web.server.example.com.
+echo "*.example.com" > /etc/puppetlabs/puppet/autosign.conf
+
+# Match a subdomain.
+echo "web.server.example.com" > /etc/puppetlabs/puppet/autosign.conf
+
+# Trailing * will not work (i.e. web.server.*)
+</source>
+
+* This does not provide security.
+* Any user without root access can generate a CSR as long as they know the valid naming options.
+* Should only be used if the Puppet server is controlled by firewalls and other security processes.
+
+=== Policy-Based Autosigning ===
+
+* Automatically sign certificates based on response provided by an external program.
+* Set the value of <code>autosign</code> in the <code>[master]</code> section of <code>puppet.conf</code> to the name of an executable program.
+
+<source lang="ini">
+[master]
+  autosign = /path/to/decision/maker
+</source>
+
+* The program can be in any compiled or scripting language, so long as it is exectuable by the <code>puppet</code> user.
+* It will receive the <code>certname</code> requested as the only command-line argument, and the contents of the CSR in PEM formet on STDIN.
+* The program needs to return an exit code of success (0) to accept the CSR, or any nonzero to reject.
+* If the program makes the decision based only on the name of the requestor, it is no more secure than name-based autosigning.
+* It should parse the PEM data to validate the nature of the request.
+* External tools such as databases, APIs, and others can be leveraged to further validate the request.
+* I.E. Verify the machine was recently provisioned in AWS with this certname.
+* Security of policy-based signing relies on the security of the data sources queried.
+
+==== Adding Custom Data to CSRs ====
+
+* You must perform the following steps on the node:
+* Create a YAML format file with the custom data.
+* Specify the YAML file wth the <code>csr_attributes</code> Puppet configuration setting.
+* Generate a new certificate for the node.
+* Default location for the attributes file is <code>$confdir/csr_attributes.yaml</code>.
+* Must contain two keys, the value of which should be a hash containing the attributes to be provided.
+
+<pre>
+# Custom attributes will be discarded when the certificate is signed.
+
+custom_attributes:
+  2.999.1.3: "Custom value 513 in the documentation OID"
+  pp_uuid: "A unique instance identifier to be validated"
+
+# Extension requests will be added to the final certificate
+# and available to the Puppet server during catalog build.
+
+extension_requests:
+  pp_cost_center: "Custom value to be used in catalog build."
+</pre>
+
+* Populate this file with any mechanism desired when configuring new nodes, such as AWS instance user data.
+* Only after this file is populated should you attempt to connect to the Puppet server.
+* OIDs (extension names) are not parsable without creating a custom mapping.
+* There are a number of built in OIDs which can be used and referenced by name.
+
+{|
+| pp_application
+| pp_cluster
+| pp_cost_center
+| pp_created_by
+|-
+| pp_department
+| pp_employee
+| pp_environment
+| pp_image_name
+|-
+| pp_instance_id
+| pp_preshared_key
+| pp_product
+| pp_provisioner
+|-
+| pp_role
+| pp_service
+| pp_software_version
+| pp_uuid
+|}
+
+==== Inspecting CSRs ====
+
+* The custom data in the CSR can be found in the <code>Attributes</code> or <code>Requested Extensions</code> block of the CSR.
+* Your program will need to parse the PEM formatted CSR.
+
+==== Using Extension Requests in Puppet ====
+
+* The data can be refrenced by the <code>extensions</code> hash key of the trusted node facts.
+
+<source lang="ruby">
+notify { 'cost-center':
+  message => "Cost center is ${trusted['extensions']['pp_cost_center']}"
+}
+</source>
+
+=== Naive Autosigning ===
+
+* Trust any agent that connects to the Puppet server.
+* Every CSR is immediately signed.
+* Don't do this.
+* Ever.
+
+<source lang="ini">
+[master]
+  autosign = true
+</source>
+
+== Using an External Certificate Authority ==
+
+* By default the Puppet server will generate its own TLS key and self-signed certificate, creating a new certification tree with it as the root authority.
+* In large enterprises, it is often necessary to have all keys issued from a centralized authority outside of Puppet.
+* Puppet servers support three configurations:
+* A Puppet server is the sole CA, and signs all certificates.
+* A single external CA signs certificates for both Puppet servers and agents.
+* Two external CAs sign certificates: one for Puppet servers, and one for agents.
+
+=== Distributing Certificates Manually ===
+
+* With external CAs, Puppet has no way to help distribute certificate files between machines.
+* Will require an external solution to distribute certificates.
+* Once you have the certificates, install them on the configured locations on each node.
+* To verify the location, run the following:
+
+<source lang="bash">
+sudo puppet config --section agent print hostcert hostprivkey localcacert
+</source>
+
+* If the certificates are issued by an intermediate CA, you will need to set a configuration value for the location of the intermediate CA's certificate.
+
+<source lang="ini">
+[agent]
+  ssl_client_ca_auth = /path/to/intermediate/ca/certificate.pem
+</source>
+
+=== Installing Certificates on the Server ===
+
+* You are required to create a CSR for the Puppet server and get it signed by the external CA.
+* Install the certificates in the configured locations (use the command above to verify).
+* Copy the Puppet server's key to the <code>hostprivkey</code> location.
+* Copy the CA's certificate to the <code>localcert</code> location.
+* Copy the certificate signed by the external CA to the <code>hostcert</code> location.
+
+=== Disabling CA on a Puppet Server ===
+
+* Comment out the following line in <code>/etc/puppetlabs/puppetserver/bootstrap.cfg</code>:
+
+<pre>
+#puppetlabs.services.ca.certificate-authority-service/
+  #certificate-authority-service</code>
+</pre>
+
+* Uncomment the following line:
+
+<pre>
+puppetlabs.services.ca.certificate-authority-disabled-service/
+  certificate-authority-disabled-service
+</pre>
+
+* Ensure that <code>/etc/puppetlabs/puppetserver/conf.d/webserver.conf</code> contains the following:
+
+<pre>
+webserver: {
+  ssl-key       : /var/opt/puppetlabs/puppetserver/ssl/private_keys/puppet.example.com.pem
+  ssl-cert      : /var/opt/puppetlabs/puppetserver/ssl/certs/puppet.example.com.pem
+  ssl-ca-cert   : /var/opt/puppetlabs/puppetserver/ssl/ca/ca_crt.pem
+  ssl-cert-chain: /var/opt/puppetlabs/puppetserver/ssl/ca/ca_crt.pem
+  ssl-crl-path  : /var/opt/puppetlabs/puppetserver/ssl/crl.pem
+}
+</pre>
+
+=== Using Different CAs for Servers and Agents ===
+
+* One intermediate CA signs certificates issued to Puppet servers, while another intermediate CA signs certificates issued to Puppet agents.
+* This process is the same as using one external CA, with the exception of the following:
+* '''Puppet Servers:''' The Puppet servers have the root CA certificate and intermediate CA certificate that signs Puppet agent keys in the file referenced by <code>localcert</code>.
+** This allows them to validate any agent certificate, but will fail to validate the certificate of another Puppet server.
+* '''Puppet Agents:''' Puppet agents will need the certificate of the intermediate CA that signs keys for the Puppet servers installed in the location specified by the <code>ssl_client_ca_auth</code> setting.
+* Puppet agent certificates cannot successfully validate on other Puppet servers, nor will Puppet servers accept keys from other Puppet servers.
+* Useful when different teams control different Puppet servers that share the same root CA.
+
+=== Distributing the CA Revocation List ===
+
+* You can enable CRL checking on both Puppet servers and agents.
+* Install the CRL in the configured locations.
+* Default is <code>/etc/puppetlabs/puppet/ssl/crl.pem</code>.
+
+<source lang="bash">
+sudo puppet config --section agent print hostcrl
+</source>
+
+* Puppet CAs provide a CRL to all agents, which is retireved when the agent acquires its certificate back from the CA.
+* If a revocation list is not provided by the external CA, you must disable CRL checking on the agent.
+
+<source lang="ini">
+[agent]
+  certificate_revocation = false
+</source>
+
+* As the agent will attempt to download the CRL from the Puppet server, which has its CA disabled, the request will fail.
+
+== Learning More About TLS Authentication ==
+
+* Task One: Set Up Name-Based Autosigning
+* Configure the server to autosign certificates for <code>*.example.com</code>.
+* Run <code>vagrant up web2</code> and install Puppet.
+* Start Puppet agent on the instance and connect to the server.
+* Observe the Puppet agent immediately receive back a signed certifiate.
+* Observe the module converge without having to run Puppet again.
+* Review the node report in <code>$vardir/reports</code>.
+* Task Two: Implement Policy-Based Autosigning
+* Create a script to inspect CSR attributes and exit with a nonzero exit code if a certain value isn't one.
+* Specify this program as the value of the <code>autosign</code> configuration variable on the Puppet server.
+* Run <code>vagrant up web3</code> and install Puppet.
+* Attempt to connect to the Puppet server and observe the rejection.
+* Regenerate the CSR with the custom attribute.
+* Attempt to connect again to the Puppet server.

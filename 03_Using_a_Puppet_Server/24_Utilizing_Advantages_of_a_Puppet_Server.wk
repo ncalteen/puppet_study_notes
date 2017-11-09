@@ -1,0 +1,268 @@
+= Utilizing Advantages of a Puppet Server =
+
+== Using Server Data in Your Manifests ==
+
+* With Puppet Server, you gain several additional data sources not available with <code>puppet apply</code>.
+
+=== Trusted Facts ===
+
+* When a node connects to a Puppet server, it transmits a list of facts about the node.
+* There is no way to validate if these facts are correct.
+* A compromised node could forge fact data that can be used to gain accass to secure information/configuration.
+* The <code>$trusted[]</code> hash contins facts that have been validated by the server, and can be trusted to be correct.
+* '''$trusted['authenticated']:''' The possible values are:
+* '''remote:''' Confirms a successful validation of the remote client's certificate.
+* '''local:''' Indicates that <code>puppet apply</code> is being used and validation is unavailable.
+* '''false:''' Warns that the <code>auth.conf</code> file is misconfigured to allow unauthenticated requests.
+* '''$trusted['certname']:''' This contains the certificate name validated by the Puppet server if remote, or the value of `$certname` in the Puppet configuration if local.
+* '''$trusted['hostname'] / $trusted['domain']:''' <code>hostname</code> will contain the part before the first period of the certificate name, and <code>domain</code> will contain the remainder.
+* This is useful when using FQDN cert names, but possibly confusing in other situations.
+* '''$trusted['extensions']:''' A hash containing all certificate extensions present in the certificate.
+* You can create additional extensions (to be discussed later).
+* This can be used to increase the security of your Hiera configuration by setting the hierarchy to use trusted facts, instead of those provided by the client.
+
+<pre>
+:hierarchy:
+  - "nodes/%{truted.certname}"
+  - "os/%{facts.osfamily}"
+  - common
+</pre>
+
+=== Server Facts ===
+
+* The server sets certain variables for use in manifests.
+* If the node provides facts of the same name, the server values will be overridden.
+* Enable the below setting for Puppet to define a new hash of server facts (that cannot be overridden).
+
+<source lang="ini">
+[master]
+  trusted_server_facts = true
+</source>
+
+* This will create the <code>$server_facts[]</code> hash.
+* '''$server_facts['serverversion']:''' Version of Puppet used by the server (not the version of Puppet Server).
+* '''$server_facts['servername']:''' The certificate name of the server.
+** This is the name used to sign all certificates (if the server is the CA).
+* '''$server_facts['serverip']:''' The IP address it was contacted on (can vary with distributed systems).
+* '''$server_facts['environment']:''' The environment selected by the server for the node.
+** It is possible for the node to request a different environment.
+** This will always be set to the environment used to process the node's catalog.
+* Always enable <code>trusted_server_facts</code>.
+* Always refer to <code>facts[]</code> for client-provided facts.
+* Always refer to <code>server_facts[]</code> for server-validated facts.
+
+=== Server Configuration Settings ===
+
+* Puppet servers make every configuration setting available as <code>$::settings::[setting_name]</code>.
+
+<source lang="ruby">
+notice("Trusted server facts are enabled: ${::settings::trusted_server_facts}")
+</source>
+
+* There is no equivalent access to node configuration settings by default.
+* To gain access to a node's configuration values, add a custom or external fact to a module.
+
+== Backing Up Files Changed on Nodes ==
+
+
+* Every file changed by a <code>file</code> resource, or reviewed by the <code>audit</code> rresource, is backed up in the <code>clientbucketdir</code> directory.
+* You can move backups of file changes to the Puppet server instead.
+* Define a <code>filebucket</code> resource with the path attribute set to false.
+
+<source lang="ruby">
+filebucket { 'puppet.example.com':
+  path   => false,
+  server => 'puppet.example.com',
+  port   => '8140',
+}</source>
+
+* As defaults are always the current server, you can back up every file to that server using the below:
+
+<source lang="ruby">
+filebucket { 'local_server':
+  path => false,
+}
+</source>
+
+* This resource should be defined in the top-scope manifest, in the environment's <code>manifests/</code> directory.
+* You can declare multiple filebucket resources, and declare within the resource, or in a resource default, which bucket to use.
+
+<source lang="ruby">
+file { '/etc/sudoers':
+  # ...
+  backup => 'security-files'  # The name of the filebucket resource.
+}
+</source>
+
+* Backing up to the Puppet server is required for viewing file changes in the Puppet Dashboard.
+
+== Processing Puppet Node Reports ==
+
+* Don't waste time excessively tuning the log levels of every resource.
+* Node reports provide direct access to every detail of the convergence process.
+
+=== Enabling Transmission of Reports ===
+
+* Agents communicating with a Puppet server send reports to the same server from which they receive the catalog.
+* This can be changed in <code>/etc/puppetlabs/puppet/puppet.conf</code>.
+
+<source lang="ini">
+[agent]
+  report = true
+  report_server = $server
+  report_port = $masterport
+</source>
+
+* You should only add/change these values if you wish to disable the sending of reports or change the report processor.
+
+=== Running Audit Inspections ===
+
+* If you have resources defined with the <code>audit</code> attribute, you can run <code>puppet inspect</code> to generate a node report of all audited resources.
+* This report will be sent to the Puppet server, or to a different server passed in the CLI.
+* You can find the inspection report in the Puppet Dashboard, under the Node Details page.
+* The <code>--archive-file_server</code> argument is optional and defaults to the configured Puppet server.
+* Backs up copies of audited files during inspection.
+* You may want to run this from <code>cron</code> on all nodes.
+
+<source lang="ruby">
+cron { 'audit-file-changes':
+  command => 'puppet inspect --archive_files',
+  user    => 'root',
+  hour    => '12',
+  minute  => '0',
+}
+</source>
+
+=== Storing Node Reports ===
+
+* Reports are stored in YAML format in <code>reportdir</code>.
+* In the scenario we have configured, this would be <code>/var/opt/puppetlabs/puppetserver/reports</code>.
+* The default is <code>/opt/puppetlabs/puppet/cache/reports</code>.
+
+<source lang="bash">
+sudo -u puppet bash
+cd /var/opt/puppetlabs/puppetserver/reports
+ls -la
+ls -la client.example.com
+head -10 client.example.com/[report_id].yaml
+</source>
+
+* On the client node, you can find the same report under <code>/opt/puppetlabs/puppet/cache/state/last_run_report.yaml</code>.
+
+=== Logging Node Reports ===
+
+* The Puppet agent will send each message at or above the configured log level to the configured log target (default is syslog).
+* If your Puppet server has access to a centralized log server not available to agent nodes, then it can be helpful to have the server send all agent messages to its own logs.
+* This can be enabled in <code>/etc/puppetlabs/puppet/puppet.conf</code>.
+
+<source lang="ini">
+[master]
+  reports = log,store
+</source>
+
+=== Transmitting Node Reports via HTTP ===
+
+* Enabled transmission of node reports to a URL by adding the <code>http</code> action to the list of report procesors, and specifying a target with <code>reporturl</code> in <code>/etc/puppetlabs/puppet/puppet.conf</code>.
+
+<source lang="ini">
+[master]
+  reports = http,store
+  reporturl = https://puppet-dashboard.example.com/
+</source>
+
+* Data will be sent via POST with a Content-type of <code>application/x-yaml</code>.
+
+=== Transmitting Node Reports to PuppetDB ===
+
+* Enable transmission of node reports to PuppetDB by adding the <code>puppetdb</code> action to the list of report processors.
+
+<source lang="ini">
+[master]
+  storeconfigs = true
+  storeconfigs_backend = puppetdb
+  reports = puppetdb,store
+</source>
+
+=== Emailing Node Reports ===
+
+* Requires installation of the <code>puppetlabs-tagmail</code> module on the Puppet server.
+
+<source lang="bash">
+puppet module install puppetlabs-tagmail
+</source>
+
+* Create a <code>/etc/puppetlabs/puppet/tagmail.conf</code> file containing a map of Puppet tags and recipients.
+* The module will send an email containing specific tags to the configured recipient.
+* The tagmail report handler allows tags to be used for filtering changes to specific resources.
+* Each line of <code>[tagmap]</code> should contain one of the below formats.
+* A list of tags or negated tags, followed by a colon and a comma-separated list of recipient emails.
+* A list of log levels or negated log levels, followed by a colon and a comma-separated list of recipient emails.
+
+<source lang="ini">
+[tagmail]
+  # Log levels
+  all: log-archive@example.com
+  emerg: puppet-admins@example.com
+
+  # Tags
+  frontend, java: fe-dev-team@example.com, java-platform@example.com
+  database, mysql: dba@example.com</pre>
+
+[transport]
+  reportfrom = puppetserver@example.com
+  sendmail = /usr/sbin/sendmail
+
+  # Direct SMTP delivery
+  # smtpserver = smtp-relay.example.com
+  # smtphelo = puppet.example.com
+  # smtpport = 25
+</source>
+
+* Enable transmission of email reports by adding the <code>tagmail</code> option to <code>puppet.conf</code>.
+
+<source lang="ini">
+[master]
+  reports = store,tagmail
+</source>
+
+=== Creating a Custom Report Processor ===
+
+* Must be written in Ruby and follow the below rules:
+* You can write a wrapper in Ruby that calls another program.
+* The script must be named according to the rules for Ruby symbols (alphanumeric only), with a trailing <code>.rb</code>.
+* It must have a <code>require 'puppet'</code> at the top of the script.
+* It must call <code>Puppet::Reports.register_report()</code> with a block of code, pasing its own name as a symbol as the only parameter.
+* The code must contain:
+** A call to <code>desc</code> with a text or Markdown-formatted string that describes the report processor.
+** A defined method called <code>process</code> that does the actual processing.
+* The <code>process</code> method will be an object of type <code>Puppet::Transaction::Report</code>.
+* It can retrieve details of the report by querying atttributes of <code>Formats::Reports</code>, or get YAML data by calling <code>self.to_yaml()</code>.
+* '''Example:''' Report processor that creates a different log message for each Puppet agent run.
+
+<source lang="ruby">
+require 'puppet'
+require 'syslog/logger'
+
+log = Syslog::Logger.new 'logActionTime'
+
+Puppet::Reports.register_report( :logActionTime ) do
+  desc "Sends one log message containing agent action times"
+
+  def process
+    source = "#{self.time} #{self.host} "
+    action = "did #{self.kind} with result of #{self.status} "
+    version = "for config #{self.configuration_version} "
+    environment = "in environment #{self.environment}"
+    log.info source + action + version + envronment
+  end
+end
+</source>
+
+* For a real report processor, you can make use of the <code>self.resource_statuses</code> and <code>self.metrics</code> hashes for details of resource status.
+* Add this report processor to <code>[module]/lib/puppet/reports/</code>.
+* Enable the report processor by adding its name to the list of processors in <code>puppet.conf</code>.
+
+<source lang="ini">
+[master]
+  reports = store, puppetdb, logActionTime
+</source>

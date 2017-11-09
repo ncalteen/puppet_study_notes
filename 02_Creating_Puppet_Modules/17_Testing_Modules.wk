@@ -1,0 +1,502 @@
+= Testing Modules =
+
+* Puppet testing is most commonly performed with <code>rspec</code> and <code>beaker</code>.
+
+== Installing Dependencies ==
+
+=== Installing Ruby ===
+
+* Install Ruby into the system packages.
+* Install the <code>bundler</code> gem for local installation of necessary dependencies.
+
+<source lang="bash">
+sudo yum install -y ruby-devel rubygems rake libxml2-devel
+sudo gem install bundler --no-ri --no-doc
+</source>
+
+=== Adding Beaker ===
+
+* Add the following to the Gemfile in the module directory.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/Gemfile'''
+
+<source lang="ruby">
+gem 'beaker-rspec', :require => false
+gem 'pry',          :require => false
+</source>
+
+* This ensures that Beaker is installed in the next step.
+* Install development libraries to compile binary extensions.
+
+<source lang="bash">
+sudo yum install -y gcc-d++ libxml2-devel libxslt-devel
+</source>
+
+=== Bundling Dependencies ===
+
+* Install the <code>puppetlabs_spec_helper</code> and other dependency gems.
+
+<source lang="bash">
+cd /etc/puppetlabs/code/environments/test/modules/puppet
+# Required for g++ compiler.
+sudo yum install -y 'Development Tools'
+# Don't run with sudo!
+bundler install
+</source>
+
+* If you run into an error here, you may need to install RVM and Ruby <= 2.1.8.
+* Follow the instructions here: https://rvm.io/rvm/install
+* After this, start from the beginning of the chapter.
+
+== Preparing Your Module ==
+
+* A module requires some specific configuration to support testing, as mentioned in the below sections.
+
+=== Defining Fixtures ===
+
+* Create a <code>.fixtures.yml</code> file in your module to define the testing fixtures (dependencies) and where to acquire them for testing purposes.
+* Should duplicate the dependencies in <code>metadata.json</code>.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/.fixtures.yml'''
+
+<pre>
+fixtures:
+  symlinks:
+    puppet: "#{source_dir}"   # From the Forge
+repositories:
+  stdlib:
+    repo: "puppetlabs/stdlib"
+    ref: 4.5.1
+</pre>
+
+* Verify the setup worked as expected.
+
+<source lang="bash">
+rake spec
+</source>
+
+== Defining RSpec Unit Tests ==
+
+* Follow these guidelines when creating tests:
+* Test every input parameter.
+* Test every file, package, and service name.
+* Test every variation in implementation your module is designed to handle.
+* Test for implicit choices based around operating system or other environmental tests.
+* Test for invalid input, as well as valid input.
+
+=== Defining the Main Class ===
+
+* Define a test where the module test builds a catalog successfully with the default options.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/puppet_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet', :type => 'class' do
+  context 'with defaults for all parameters' do
+    it do
+      should contain_class('puppet')
+    end
+
+    it do
+      should.compile.with_all_deps
+    end
+  end
+end
+</source>
+
+* Run the testing suite against this.
+
+<source lang="bash">
+rake spec
+</source>
+
+=== Passing Valid Parameters ===
+
+* Use Ruby loops to iteratively test each possible input value.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/puppet_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet', :type => 'class' do
+  context 'with defaults for all parameters' do
+    it do
+      should contain_class('puppet')
+    end
+
+    it do
+      should compile.with_all_deps
+    end
+  end
+end
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet::config', :type => 'class' do
+  ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel| # Loop through log level options.
+    context "with common_loglevel = #{common_loglevel}" do
+      let :params do
+        # :server is hardcoded for demonstrative purposes only.
+        {
+          :common_loglevel => common_loglevel,
+          :server => 'puppet.example.com',
+        }
+      end
+
+      it do
+        should contain_file('puppet.conf').with({ })
+      end
+    end
+  end
+end
+</source>
+
+<source lang="bash">
+rake spec
+</source>
+
+=== Failing Invalid Parameters ===
+
+* Test to ensure incorrect values fail.
+* The test below is intended to fail!
+
+<source lang="ruby">
+context 'with invalid common_loglevel' do
+  let :params do
+    {
+      :common_loglevel => 'annoying',
+    }
+  end
+end
+</source>
+
+<source lang="bash">
+rake spec
+</source>
+
+* To further demonstrate this, we can change the <code>expect</code> lines to accept the error we are expecting with the above test.
+
+<source lang="ruby">
+expect { should raise_error(Puppet::Error,
+  /Invalid value "annoying". Valid values are/)
+}
+</source>
+
+<source lang="bash">
+rake spec   # This time, the tests will come back successful
+</source>
+
+=== Testing File Creation ===
+
+* The simplest form for testing file creation is:
+
+<source lang="ruby">
+it (should contain_file('/etc/puppetlabs/puppet/puppet.conf'))
+</source>
+
+* This only checks if the file exists, and not that if it was modified correctly by the module.
+* Test resource attributes using a longer form.
+
+<source lang="ruby">
+it do
+  should contain_file('/etc/puppetlabs/puppet/puppet.conf').with({
+      'ensure' => 'present',
+      'owner'  => 'root',
+      'group'  => 'root',
+      'mode'   => '0644',
+  })
+end
+</source>
+
+* We can also check the content against a regular expression, to verify content is written to file.
+
+<source lang="ruby">
+let :params do
+  {
+    :loglevel => 'notice',
+  }
+end
+
+it do
+  should contain_file('/etc/puppetlabs/puppet/puppet.conf').with_content({ /^common_loglevel=notice/ })
+end
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/puppet_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet', :type => 'class' do
+  context 'with defaults for all parameters' do
+    it do
+      should contain_class('puppet')
+    end
+
+    it do
+      should compile.with_all_deps
+    end
+  end
+end
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet::config', :type => 'class' do
+  ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel|
+    # Loop through log level options.
+    context "with common_loglevel = #{common_loglevel}" do
+      let :params do
+        # :server is hardcoded for demonstrative purposes only.
+        {
+          :common_loglevel => common_loglevel,
+          :server => 'puppet.example.com',
+        }
+      end
+
+      it do
+        # Has to be set to use the common_loglevel parameter.
+        # Setting it to one of the valid valuse will cause it to fail for the rest.
+        should contain_file('puppet.conf').with_content(
+          /^\s*log_level\s*=\s*#{common_loglevel}/
+        )
+      end
+    end
+  end
+end
+</source>
+
+<source lang="bash">
+rake spec   # This will fail.
+            # Change log level to info and try again.
+</source>
+
+=== Validating Class Inclusion ===
+
+* You can test to ensure that dependent classes are loaded.
+
+<source lang="ruby">
+it { should contain_class('puppet::config') }
+</code>
+
+* When testing a defined type, set a title for the type to be passed during the test.
+
+<source lang="ruby">
+let(:title) { 'mytype_testing' }
+</source>
+
+=== Using Facts in Tests ===
+
+* Some manifests or test may require that facts are defined properly.
+* In the <code>context</code> block, define a hash with the fact values you would like to have available in the test.
+
+<source lang="ruby">
+let :facts do
+  {
+    :osfamily => 'RedHat',
+    :os       => {
+      'family'  => 'RedHat',
+      'release' => { 'major' => '7', 'minor' => '2' }
+    },
+  }
+end
+</source>
+
+* By default, the <code>hostname</code>, <code>domain</code>, and <code>fqdn</code> facts are set from the FQDN of the host.
+* To adjust these, set the node name and they will adjust accordingly.
+
+<source lang="ruby">
+let(:node) { 'webserver01.example.com' }
+</source>
+
+=== Using Hiera Input ===
+
+* Change to the <code>[module]/spec/fixtures/</code> directory.
+* Create a <code>hiera/</code> directory, containing a valid <code>hiera.yaml</code> for testing.
+
+<source lang="bash">
+cd /etc/puppetlabs/code/environments/test/modules/puppet/spec/fixtures/
+mkdir hiera
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/fixtures/hiera/hiera.yaml'''
+
+<pre>
+---
+:backends:
+  - yaml
+:yaml:
+  :datadir: /etc/puppetlabs/code/hieradata
+:hierarchy:
+  - "hostname/%{trusted.hostname}"
+  - "os/%{facts.osfamily}"
+  - "common"
+</pre>
+
+* Add the below lines to a test context within one of the class spec files.
+
+<source lang="ruby">
+let(:hiera_config) { 'spec/fixtures/hiera/hiera.yaml' }
+hiera = Hiera.new( :config => 'spec/fixtures/hiera/hiera.yaml' )
+</source>
+
+* Create the Hiera input files within <code>./spec/fixtures/hiera/</code>.
+
+<source lang="bash">
+cp /etc/puppetlabs/code/hieradata/common.yaml ./spec/fixtures/hiera/common.yaml
+mkdir ./spec/fixtures/hiera/hostname
+cp /etc/puppetlabs/code/hieradata/hostname/client.yaml ./spec/fixtures/hiera/hostname/client.yaml
+</source>
+
+* Now you can use Hiera to configure data in tests.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/puppet_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet', :type => 'class' do
+  context 'with defaults for all parameters' do
+    it do
+      should contain_class('puppet')
+    end
+
+    it do
+      should compile.with_all_deps
+    end
+  end
+end
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/config_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet::config', :type => 'class' do
+  ['emerg', 'crit', 'alert', 'err', 'warning', 'notice', 'info'].each do |common_loglevel|
+    # Loop through log level options.
+    context "with common_loglevel = #{common_loglevel}" do
+      let :params do
+        # :server is hardcoded for demonstrative purposes only.
+        {
+          :common_loglevel => common_loglevel,
+          :server => 'puppet.example.com',
+        }
+      end
+
+      it do
+        # Has to be set to use the common_loglevel parameter.
+        # Setting it to one of the valid valuse will cause it to fail for the rest.
+        should contain_file('puppet.conf').with_content(
+          /^\s*log_level\s*=\s*#{common_loglevel}/
+        )
+      end
+    end
+  end
+end
+</source>
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/agent_spec.rb'''
+
+```ruby
+
+```
+
+<source lang="bash">
+rake spec   # This will fail.
+            # Change log level to info and try again.
+</source>
+
+=== Defining Parent Class Parameters ===
+
+* Your module may depend on a class that requires some parameters to be provided.
+* You cannot set parameters or use Hiera for that class, because it is out of scope of the current class and test file.
+* Use a <code>pre_condition</code> block to call the parent class in resource-style format.
+
+<source lang="ruby">
+describe 'mcollective::client' do
+  let(:pre_condition) do
+    'class { "mcollective":
+      hosts           => ["middleware.example.net"],
+      client_password => "fakepassword",
+      server_password => "fakepassword",
+      psk_key         => "fakekey",
+    }'
+  end
+  
+  # tests...
+end
+</source>
+
+=== Testing Functions ===
+
+* Each function test should exist in a separate file, stored in <code>spec/functions/</code> of the module, and named <code>[function]_spec.rb</code>.
+* Tests should include:
+* The function is defined within the Puppet space (test for <code>function_[function]</code>).
+* There aren't insufficient or too many values.
+* Given an expected input, it produces an expected output.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/functions/make_boolean_spec.rb'''
+
+<source lang="ruby">
+#! /usr/bin/env ruby -S rspec
+require 'spec_helper'
+require 'puppetlabs_spec_helper/puppetlabs_spec/puppet_internals'
+
+describe "the make_boolean function" do
+  let(:scope) { PuppetSpec::Scope }
+
+  it "should exist" do
+    expect(Puppet::Functions.function("make_boolean")).to
+      eq("function_make_boolean")
+  end
+
+  if "should raise a ParseError if there is less than 1 argument" do
+    expect { scope.function_make_boolean([])}.to(
+      raise_error(Puppet::ParseError)
+    )
+  end
+
+  it "should convert 0 to false" do
+    result = scope.function_make_boolean(["0"])
+    expect(result).to(eq(false))
+  end
+end
+</source>
+
+=== Adding an Agent Class ===
+
+* Within the <code>spec/classes/</code> directory, create a file named <code>agent_spec.rb</code>.
+* Build the agent class, test every valid and invalid input.
+* Test that the package, config file, and service resources are all defined.
+
+'''/etc/puppetlabs/code/environments/test/modules/puppet/spec/classes/agent_spec.rb'''
+
+<source lang="ruby">
+require 'spec_helper'
+
+describe 'puppet::agent', :type => 'class' do
+  context 'with defaults for all parameters' do
+    it do
+      should contain_package('puppet-agent').with({'version' => 'latest'})
+      should contain_file('puppet.conf').with({'ensure' => 'file'})
+      should contain_service('puppet').with({'ensure' => 'running'})
+    end
+
+    it do
+      should compile.with_all_deps
+    end
+  end
+end
+</source>

@@ -130,7 +130,7 @@
 - Previously interpolated values won't be interpolated again.
 
   ```puppet
-  $inform "${describe}, resolved"
+  $inform = "${describe}, resolved"
   # Outputs "$user uses a $ and a \, resolved"
   ```
 
